@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -69,22 +70,24 @@ public class FtpProxyController {
         }
     }
 
-    @PostMapping(value = "/convert-heic", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<byte[]> convertHeicToJpeg(@RequestParam("file") MultipartFile file) {
+    @PostMapping(value = "/convert-heic", consumes = {"application/octet-stream", "image/heic", "image/*"})
+    public ResponseEntity<byte[]> convertHeicToJpeg(@RequestBody byte[] fileBytes) {
         try {
-            if (file.isEmpty()) {
+            if (fileBytes == null || fileBytes.length == 0) {
                 return ResponseEntity.badRequest().body("Empty file".getBytes());
             }
-            String originalName = file.getOriginalFilename();
-            if (originalName == null || !originalName.toLowerCase().endsWith(".heic")) {
-                return ResponseEntity.badRequest().body("Only .heic files supported".getBytes());
+
+            if (!isHeicBySignature(fileBytes)) {
+                System.out.println("⚠️ Warning: file may not be HEIC, but attempting conversion anyway");
             }
+
             Path tempPath = Paths.get(tempDir);
             Files.createDirectories(tempPath);
             String uniqueId = UUID.randomUUID().toString();
             File inputHeic = tempPath.resolve(uniqueId + ".heic").toFile();
             File outputJpeg = tempPath.resolve(uniqueId + ".jpg").toFile();
-            file.transferTo(inputHeic);
+
+            FileUtils.writeByteArrayToFile(inputHeic, fileBytes);
 
             boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg);
 
@@ -92,6 +95,7 @@ public class FtpProxyController {
                 return ResponseEntity.internalServerError()
                         .body("Conversion failed: no suitable converter found".getBytes());
             }
+
             byte[] jpegBytes = FileUtils.readFileToByteArray(outputJpeg);
             FileUtils.deleteQuietly(inputHeic);
             FileUtils.deleteQuietly(outputJpeg);
@@ -99,11 +103,18 @@ public class FtpProxyController {
             return ResponseEntity.ok()
                     .contentType(MediaType.IMAGE_JPEG)
                     .body(jpegBytes);
+
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.internalServerError()
                     .body(("Conversion error: " + e.getMessage()).getBytes());
         }
+    }
+
+    private boolean isHeicBySignature(byte[] bytes) {
+        if (bytes.length < 12) return false;
+        String sig = new String(bytes, 4, 8, java.nio.charset.StandardCharsets.ISO_8859_1);
+        return sig.contains("heic") || sig.contains("heix") || sig.contains("mif1");
     }
 
     private boolean tryConvertWithLibheif(File input, File output) {
