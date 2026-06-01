@@ -92,9 +92,10 @@ public class FtpProxyController {
             boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg);
 
             if (!converted || !outputJpeg.exists() || outputJpeg.length() == 0) {
-                return ResponseEntity.internalServerError()
-                        .body("Conversion failed: no suitable converter found".getBytes());
+                System.out.println("⚠️ libheif failed, trying ffmpeg fallback...");
+                converted = tryConvertWithFfmpeg(inputHeic, outputJpeg);
             }
+
 
             byte[] jpegBytes = FileUtils.readFileToByteArray(outputJpeg);
             FileUtils.deleteQuietly(inputHeic);
@@ -130,16 +131,45 @@ public class FtpProxyController {
 
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    System.out.println("[heif-convert] " + line);
-                }
+                reader.lines().forEach(line -> System.out.println("[heif-convert] " + line));
             }
 
             int exitCode = process.waitFor();
             return exitCode == 0 && output.exists() && output.length() > 0;
         } catch (Exception e) {
             System.err.println("heif-convert failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean tryConvertWithFfmpeg(File input, File output) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-i", input.getAbsolutePath(),
+                    "-q:v", "2",
+                    "-y",
+                    output.getAbsolutePath()
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.trim().isEmpty()) {
+                        System.err.println("[ffmpeg] " + line);
+                    }
+                }
+            }
+
+            int exitCode = process.waitFor();
+            return exitCode == 0 && output.exists() && output.length() > 0;
+        } catch (Exception e) {
+            System.err.println("ffmpeg conversion failed: " + e.getMessage());
             return false;
         }
     }
