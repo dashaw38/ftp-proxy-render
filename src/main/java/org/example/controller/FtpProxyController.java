@@ -121,7 +121,7 @@ public class FtpProxyController {
         try {
             ProcessBuilder pb = new ProcessBuilder(
                     "heif-convert",
-                    "--quality", "90",
+                    "-q", "90",
                     input.getAbsolutePath(),
                     output.getAbsolutePath()
             );
