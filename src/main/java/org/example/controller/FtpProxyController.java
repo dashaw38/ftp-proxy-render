@@ -91,19 +91,21 @@ public class FtpProxyController {
 
             boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg);
 
-            if (!converted || !outputJpeg.exists() || outputJpeg.length() == 0) {
+            if (!converted) {
                 System.out.println("⚠️ libheif failed, trying ffmpeg fallback...");
                 converted = tryConvertWithFfmpeg(inputHeic, outputJpeg);
             }
 
+            if (!converted || !outputJpeg.exists() || outputJpeg.length() == 0) {
+                FileUtils.deleteQuietly(inputHeic);
+                return ResponseEntity.internalServerError()
+                        .body("Conversion failed: no suitable converter found".getBytes());
+            }
 
             byte[] jpegBytes = FileUtils.readFileToByteArray(outputJpeg);
             FileUtils.deleteQuietly(inputHeic);
             FileUtils.deleteQuietly(outputJpeg);
-
-            return ResponseEntity.ok()
-                    .contentType(MediaType.IMAGE_JPEG)
-                    .body(jpegBytes);
+            return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).body(jpegBytes);
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -144,6 +146,13 @@ public class FtpProxyController {
 
     private boolean tryConvertWithFfmpeg(File input, File output) {
         try {
+            ProcessBuilder checkPb = new ProcessBuilder("which", "ffmpeg");
+            Process checkProc = checkPb.start();
+            if (checkProc.waitFor() != 0) {
+                System.err.println("ffmpeg not found in PATH");
+                return false;
+            }
+
             ProcessBuilder pb = new ProcessBuilder(
                     "ffmpeg",
                     "-hide_banner",
