@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libheif1 \
     libheif-examples \
     ffmpeg \
+    libavcodec-extra \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

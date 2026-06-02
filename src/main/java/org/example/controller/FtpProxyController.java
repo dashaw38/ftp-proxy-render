@@ -146,19 +146,14 @@ public class FtpProxyController {
 
     private boolean tryConvertWithFfmpeg(File input, File output) {
         try {
-            ProcessBuilder checkPb = new ProcessBuilder("which", "ffmpeg");
-            Process checkProc = checkPb.start();
-            if (checkProc.waitFor() != 0) {
-                System.err.println("ffmpeg not found in PATH");
-                return false;
-            }
-
             ProcessBuilder pb = new ProcessBuilder(
                     "ffmpeg",
                     "-hide_banner",
                     "-loglevel", "error",
+                    "-f", "heic",          // 🔑 явно указываем формат
                     "-i", input.getAbsolutePath(),
-                    "-q:v", "2",
+                    "-q:v", "2",           // качество ~90%
+                    "-pix_fmt", "yuv420p", // совместимость с JPEG
                     "-y",
                     output.getAbsolutePath()
             );
@@ -167,18 +162,13 @@ public class FtpProxyController {
 
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (!line.trim().isEmpty()) {
-                        System.err.println("[ffmpeg] " + line);
-                    }
-                }
+                reader.lines().forEach(line -> System.err.println("[ffmpeg] " + line));
             }
 
             int exitCode = process.waitFor();
             return exitCode == 0 && output.exists() && output.length() > 0;
         } catch (Exception e) {
-            System.err.println("ffmpeg conversion failed: " + e.getMessage());
+            System.err.println("ffmpeg failed: " + e.getMessage());
             return false;
         }
     }
