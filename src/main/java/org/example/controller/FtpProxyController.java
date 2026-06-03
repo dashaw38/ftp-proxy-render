@@ -90,6 +90,10 @@ public class FtpProxyController {
             FileUtils.writeByteArrayToFile(inputHeic, fileBytes);
 
             boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg);
+            if (!converted) {
+                System.out.println("⚠️ libheif failed, trying ffmpeg fallback...");
+                converted = tryConvertWithImageMagick(inputHeic, outputJpeg);
+            }
 
             if (!converted) {
                 System.out.println("⚠️ libheif failed, trying ffmpeg fallback...");
@@ -118,6 +122,43 @@ public class FtpProxyController {
         if (bytes.length < 12) return false;
         String sig = new String(bytes, 4, 8, java.nio.charset.StandardCharsets.ISO_8859_1);
         return sig.contains("heic") || sig.contains("heix") || sig.contains("mif1");
+    }
+
+    private boolean tryConvertWithImageMagick(File input, File output) {
+        try {
+            ProcessBuilder checkPb = new ProcessBuilder("which", "convert");
+            if (checkPb.start().waitFor() != 0) {
+                System.err.println("ImageMagick 'convert' not found");
+                return false;
+            }
+
+            ProcessBuilder pb = new ProcessBuilder(
+                    "convert",
+                    input.getAbsolutePath() + "[0]",
+                    "-quality", "90",
+                    "-strip",
+                    "-colorspace", "RGB",
+                    output.getAbsolutePath()
+            );
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (!line.trim().isEmpty() && !line.toLowerCase().contains("profile")) {
+                        System.err.println("[imagemagick] " + line);
+                    }
+                }
+            }
+
+            int exitCode = process.waitFor();
+            return exitCode == 0 && output.exists() && output.length() > 0;
+        } catch (Exception e) {
+            System.err.println("ImageMagick conversion failed: " + e.getMessage());
+            return false;
+        }
     }
 
     private boolean tryConvertWithLibheif(File input, File output) {
@@ -150,10 +191,10 @@ public class FtpProxyController {
                     "ffmpeg",
                     "-hide_banner",
                     "-loglevel", "error",
-                    "-f", "heic",          // 🔑 явно указываем формат
+                    "-f", "heic",
                     "-i", input.getAbsolutePath(),
-                    "-q:v", "2",           // качество ~90%
-                    "-pix_fmt", "yuv420p", // совместимость с JPEG
+                    "-q:v", "2",
+                    "-pix_fmt", "yuv420p",
                     "-y",
                     output.getAbsolutePath()
             );
