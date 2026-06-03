@@ -6,7 +6,13 @@ RUN mvn clean package -DskipTests
 
 FROM eclipse-temurin:17-jre-jammy
 
-# Устанавливаем ВСЕ инструменты с поддержкой HEIC
+# Устанавливаем инструменты для добавления репозиториев
+RUN apt-get update && apt-get install -y software-properties-common
+
+# Добавляем репозиторий со свежей версией libheif (ppa:strukturag)
+RUN add-apt-repository -y ppa:strukturag/libheif
+
+# Обновляем и устанавливаем
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libheif1 \
     libheif-examples \
@@ -15,7 +21,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libvips-tools \
     imagemagick \
     libmagickcore-6.q16-6-extra \
-    libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
