@@ -77,40 +77,30 @@ public class FtpProxyController {
                 return ResponseEntity.badRequest().body("Empty file".getBytes());
             }
 
-            if (!isHeicBySignature(fileBytes)) {
-                System.out.println("⚠️ Warning: file may not be HEIC, but attempting conversion anyway");
-            }
-
             Path tempPath = Paths.get(tempDir);
             Files.createDirectories(tempPath);
-            String uniqueId = UUID.randomUUID().toString();
-            File inputHeic = tempPath.resolve(uniqueId + ".heic").toFile();
-            File outputJpeg = tempPath.resolve(uniqueId + ".jpg").toFile();
+            String id = UUID.randomUUID().toString();
+            File inputHeic = tempPath.resolve(id + ".heic").toFile();
+            File outputJpeg = tempPath.resolve(id + ".jpg").toFile();
 
             FileUtils.writeByteArrayToFile(inputHeic, fileBytes);
 
-            boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg);
-            if (!converted) {
-                System.out.println("⚠️ libheif failed, trying ffmpeg fallback...");
-                converted = tryConvertWithImageMagick(inputHeic, outputJpeg);
-            }
-
-            if (!converted) {
-                System.out.println("⚠️ libheif failed, trying ffmpeg fallback...");
-                converted = tryConvertWithFfmpeg(inputHeic, outputJpeg);
-            }
+            boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg)
+                    || tryConvertWithFfmpeg(inputHeic, outputJpeg)
+                    || tryConvertWithVips(inputHeic, outputJpeg)
+                    || tryConvertWithImageMagick(inputHeic, outputJpeg);
 
             if (!converted || !outputJpeg.exists() || outputJpeg.length() == 0) {
                 FileUtils.deleteQuietly(inputHeic);
                 return ResponseEntity.internalServerError()
-                        .body("Conversion failed: no suitable converter found".getBytes());
+                        .body("Conversion failed: no local converter succeeded".getBytes());
             }
 
             byte[] jpegBytes = FileUtils.readFileToByteArray(outputJpeg);
             FileUtils.deleteQuietly(inputHeic);
             FileUtils.deleteQuietly(outputJpeg);
-            return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).body(jpegBytes);
 
+            return ResponseEntity.ok().contentType(MediaType.IMAGE_JPEG).body(jpegBytes);
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.internalServerError()
@@ -118,98 +108,45 @@ public class FtpProxyController {
         }
     }
 
-    private boolean isHeicBySignature(byte[] bytes) {
-        if (bytes.length < 12) return false;
-        String sig = new String(bytes, 4, 8, java.nio.charset.StandardCharsets.ISO_8859_1);
-        return sig.contains("heic") || sig.contains("heix") || sig.contains("mif1");
+    private boolean tryConvertWithLibheif(File in, File out) {
+        return runCommand("heif-convert", "-q", "90", in.getAbsolutePath(), out.getAbsolutePath());
     }
 
-    private boolean tryConvertWithImageMagick(File input, File output) {
+    private boolean tryConvertWithFfmpeg(File in, File out) {
+        return runCommand("ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-i", in.getAbsolutePath(), "-q:v", "2", "-y", out.getAbsolutePath());
+    }
+
+    private boolean tryConvertWithVips(File in, File out) {
+        // [Q=90] задаёт качество JPEG в синтаксисе vips
+        return runCommand("vips", "copy", in.getAbsolutePath(), out.getAbsolutePath() + "[Q=90]");
+    }
+
+    private boolean tryConvertWithImageMagick(File in, File out) {
+        return runCommand("convert", in.getAbsolutePath() + "[0]", "-quality", "90", "-strip", out.getAbsolutePath());
+    }
+
+    private boolean runCommand(String... cmd) {
         try {
-            ProcessBuilder checkPb = new ProcessBuilder("which", "convert");
-            if (checkPb.start().waitFor() != 0) {
-                System.err.println("ImageMagick 'convert' not found");
-                return false;
-            }
+            ProcessBuilder check = new ProcessBuilder("which", cmd[0]);
+            if (check.start().waitFor() != 0) return false;
 
-            ProcessBuilder pb = new ProcessBuilder(
-                    "convert",
-                    input.getAbsolutePath() + "[0]",
-                    "-quality", "90",
-                    "-strip",
-                    "-colorspace", "RGB",
-                    output.getAbsolutePath()
-            );
+            ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(true);
-            Process process = pb.start();
+            Process p = pb.start();
 
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
                 String line;
-                while ((line = reader.readLine()) != null) {
-                    if (!line.trim().isEmpty() && !line.toLowerCase().contains("profile")) {
-                        System.err.println("[imagemagick] " + line);
-                    }
+                while ((line = r.readLine()) != null) {
+                    System.out.println("[" + cmd[0] + "] " + line);
                 }
             }
-
-            int exitCode = process.waitFor();
-            return exitCode == 0 && output.exists() && output.length() > 0;
+            int exit = p.waitFor();
+            boolean success = exit == 0;
+            if (success) System.out.println("✅ " + cmd[0] + " succeeded");
+            return success;
         } catch (Exception e) {
-            System.err.println("ImageMagick conversion failed: " + e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean tryConvertWithLibheif(File input, File output) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder(
-                    "heif-convert",
-                    "-q", "90",
-                    input.getAbsolutePath(),
-                    output.getAbsolutePath()
-            );
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
-                reader.lines().forEach(line -> System.out.println("[heif-convert] " + line));
-            }
-
-            int exitCode = process.waitFor();
-            return exitCode == 0 && output.exists() && output.length() > 0;
-        } catch (Exception e) {
-            System.err.println("heif-convert failed: " + e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean tryConvertWithFfmpeg(File input, File output) {
-        try {
-            ProcessBuilder pb = new ProcessBuilder(
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel", "error",
-                    "-f", "heic",
-                    "-i", input.getAbsolutePath(),
-                    "-q:v", "2",
-                    "-pix_fmt", "yuv420p",
-                    "-y",
-                    output.getAbsolutePath()
-            );
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream()))) {
-                reader.lines().forEach(line -> System.err.println("[ffmpeg] " + line));
-            }
-
-            int exitCode = process.waitFor();
-            return exitCode == 0 && output.exists() && output.length() > 0;
-        } catch (Exception e) {
-            System.err.println("ffmpeg failed: " + e.getMessage());
+            System.err.println("[" + cmd[0] + "] failed: " + e.getMessage());
             return false;
         }
     }
