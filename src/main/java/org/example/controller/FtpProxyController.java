@@ -14,6 +14,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -88,7 +89,8 @@ public class FtpProxyController {
             boolean converted = tryConvertWithLibheif(inputHeic, outputJpeg)
                     || tryConvertWithFfmpeg(inputHeic, outputJpeg)
                     || tryConvertWithVips(inputHeic, outputJpeg)
-                    || tryConvertWithImageMagick(inputHeic, outputJpeg);
+                    || tryConvertWithImageMagick(inputHeic, outputJpeg)
+                    || tryExtractPreviewWithExiftool(inputHeic, outputJpeg);
 
             if (!converted || !outputJpeg.exists() || outputJpeg.length() == 0) {
                 FileUtils.deleteQuietly(inputHeic);
@@ -147,6 +149,48 @@ public class FtpProxyController {
             return success;
         } catch (Exception e) {
             System.err.println("[" + cmd[0] + "] failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    private boolean tryExtractPreviewWithExiftool(File input, File output) {
+        try {
+            ProcessBuilder check = new ProcessBuilder("which", "exiftool");
+            if (check.start().waitFor() != 0) return false;
+
+            ProcessBuilder pb = new ProcessBuilder(
+                    "exiftool",
+                    "-b",           // бинарный вывод
+                    "-PreviewImage", // извлекаем превью
+                    input.getAbsolutePath()
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+
+            try (FileOutputStream fos = new FileOutputStream(output)) {
+                p.getInputStream().transferTo(fos);
+            }
+
+            int exit = p.waitFor();
+            boolean success = exit == 0 && output.exists() && output.length() > 10_000; // минимум 10KB
+
+            if (success) {
+                System.out.println("✅ Exiftool preview extracted successfully");
+            } else {
+                ProcessBuilder pb2 = new ProcessBuilder(
+                        "exiftool", "-b", "-ThumbnailImage", input.getAbsolutePath()
+                );
+                pb2.redirectErrorStream(true);
+                Process p2 = pb2.start();
+                try (FileOutputStream fos = new FileOutputStream(output)) {
+                    p2.getInputStream().transferTo(fos);
+                }
+                exit = p2.waitFor();
+                success = exit == 0 && output.exists() && output.length() > 5_000;
+            }
+            return success;
+        } catch (Exception e) {
+            System.err.println("Exiftool preview extraction failed: " + e.getMessage());
             return false;
         }
     }
